@@ -557,7 +557,6 @@ export const RouteId = {
   EnableSkillToolDefaults: "enableSkillToolDefaults",
   GetSkillSandboxArtifact: "getSkillSandboxArtifact",
   GetSkillSandboxConversationArtifacts: "getSkillSandboxConversationArtifacts",
-  GetSkillSandboxFiles: "getSkillSandboxFiles",
   CreateProject: "createProject",
   GetProjects: "getProjects",
   GetProject: "getProject",
