@@ -1400,9 +1400,6 @@ export const requiredPagePermissionsMap: Record<string, Permissions> = {
   "/chat": { chat: ["read"] },
   "/chat/[conversationId]": { chat: ["read"] },
 
-  // My Files
-  "/my-files": { sandbox: ["execute"] },
-
   // Projects
   "/projects": { project: ["read"] },
   "/projects/[id]": { project: ["read"] },
