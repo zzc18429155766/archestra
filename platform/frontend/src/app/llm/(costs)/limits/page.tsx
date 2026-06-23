@@ -162,8 +162,7 @@ const ENTITY_TYPE_ITEMS: Array<{
   {
     value: "environment",
     label: "Environment",
-    description:
-      "Caps the combined spend of all users in a deployment environment (e.g. production).",
+    description: "Caps the combined spend of all users in a deployment environment (e.g. production).",
     icon: <Boxes className="h-4 w-4 shrink-0 text-muted-foreground" />,
   },
 ];
@@ -179,6 +178,133 @@ function formatCurrencyWhole(value: number) {
 function formatNumericInput(value: string) {
   if (!value) return "";
   return Number(value).toLocaleString("en-US");
+}
+
+// NEW: Countdown badge component
+function ResetCountdownBadge({ 
+  lastCleanup, 
+  cleanupInterval 
+}: { 
+  lastCleanup: LimitData["lastCleanup"];
+  cleanupInterval: LimitCleanupInterval;
+}) {
+  const [timeLeft, setTimeLeft] = useState<string>("");
+  const [isUrgent, setIsUrgent] = useState(false);
+
+  useEffect(() => {
+    const calculateTimeLeft = () => {
+      let nextReset: Date;
+      
+      if (isCalendarCleanupInterval(cleanupInterval)) {
+        nextReset = getNextCalendarResetDate(new Date(), cleanupInterval);
+      } else if (lastCleanup) {
+        nextReset = addCleanupInterval(new Date(lastCleanup), cleanupInterval);
+      } else {
+        setTimeLeft("Next check");
+        return;
+      }
+
+      const now = new Date();
+      const diff = nextReset.getTime() - now.getTime();
+      
+      if (diff <= 0) {
+        setTimeLeft("Resetting...");
+        setIsUrgent(true);
+        return;
+      }
+
+      const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+      if (days > 0) {
+        setTimeLeft(`${days}d ${hours}h`);
+        setIsUrgent(false);
+      } else if (hours > 0) {
+        setTimeLeft(`${hours}h ${minutes}m`);
+        setIsUrgent(hours < 2);
+      } else {
+        setTimeLeft(`${minutes}m`);
+        setIsUrgent(true);
+      }
+    };
+
+    calculateTimeLeft();
+    const interval = setInterval(calculateTimeLeft, 60000); // Update every minute
+
+    return () => clearInterval(interval);
+  }, [lastCleanup, cleanupInterval]);
+
+  return (
+    <Badge 
+      variant={isUrgent ? "destructive" : "secondary"}
+      className="text-xs"
+    >
+      {timeLeft}
+    </Badge>
+  );
+}
+
+// Helper function to check if cleanup interval is calendar-based
+function isCalendarCleanupInterval(interval: LimitCleanupInterval): boolean {
+  return ["daily", "weekly", "monthly", "yearly"].includes(interval);
+}
+
+// Helper function to get next calendar reset date
+function getNextCalendarResetDate(now: Date, interval: LimitCleanupInterval): Date {
+  const next = new Date(now);
+  
+  switch (interval) {
+    case "daily":
+      next.setDate(next.getDate() + 1);
+      next.setHours(0, 0, 0, 0);
+      break;
+    case "weekly":
+      next.setDate(next.getDate() + (7 - next.getDay()));
+      next.setHours(0, 0, 0, 0);
+      break;
+    case "monthly":
+      next.setMonth(next.getMonth() + 1, 1);
+      next.setHours(0, 0, 0, 0);
+      break;
+    case "yearly":
+      next.setFullYear(next.getFullYear() + 1, 0, 1);
+      next.setHours(0, 0, 0, 0);
+      break;
+  }
+  
+  return next;
+}
+
+// Helper function to add cleanup interval to a date
+function addCleanupInterval(date: Date, interval: LimitCleanupInterval): Date {
+  const next = new Date(date);
+  
+  switch (interval) {
+    case "1h":
+      next.setHours(next.getHours() + 1);
+      break;
+    case "6h":
+      next.setHours(next.getHours() + 6);
+      break;
+    case "12h":
+      next.setHours(next.getHours() + 12);
+      break;
+    case "24h":
+      next.setDate(next.getDate() + 1);
+      break;
+    case "7d":
+      next.setDate(next.getDate() + 7);
+      break;
+    case "30d":
+      next.setDate(next.getDate() + 30);
+      break;
+    default:
+      // Calendar intervals
+      return getNextCalendarResetDate(date, interval);
+  }
+  
+  return next;
 }
 
 export default function LimitsPage() {
@@ -522,15 +648,22 @@ export default function LimitsPage() {
       {
         accessorKey: "cleanupInterval",
         header: "Cleanup",
-        size: 140,
-        minSize: 120,
+        size: 180, // Increased size for countdown badge
+        minSize: 150,
         cell: ({ row }) => {
           const cleanupInterval =
             (row.original.cleanupInterval as LimitCleanupInterval | null) ??
             DEFAULT_LIMIT_CLEANUP_INTERVAL;
           return (
-            <div className="space-y-0.5">
-              <div>{CLEANUP_INTERVAL_LABELS[cleanupInterval]}</div>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span>{CLEANUP_INTERVAL_LABELS[cleanupInterval]}</span>
+                {/* NEW: Countdown badge */}
+                <ResetCountdownBadge
+                  lastCleanup={row.original.lastCleanup}
+                  cleanupInterval={cleanupInterval}
+                />
+              </div>
               <div className="text-xs text-muted-foreground">
                 {formatNextLimitReset(
                   row.original.lastCleanup,
@@ -700,7 +833,7 @@ export default function LimitsPage() {
             <SelectValue placeholder="All scopes" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All applied to</SelectItem>
+            <SelectItem value="all">All scopes</SelectItem>
             <SelectItem value="organization">Organization</SelectItem>
             <SelectItem value="team">Team</SelectItem>
             <SelectItem value="agent">Agent</SelectItem>
@@ -712,32 +845,33 @@ export default function LimitsPage() {
         </Select>
 
         <LlmModelSearchableSelect
+          models={modelOptions}
           value={modelFilter}
           onValueChange={(value) =>
             updateQueryParams({ model: value === "all" ? null : value })
           }
-          options={modelOptions}
           placeholder="All models"
-          className="sm:max-w-[320px]"
-          showPricing={false}
-          includeAllOption
-          allLabel="All models"
+          className="w-full sm:w-[220px]"
         />
+
+        {hasActiveFilters && (
+          <Button
+            variant="ghost"
+            onClick={() =>
+              updateQueryParams({ status: null, appliedTo: null, model: null })
+            }
+          >
+            Clear filters
+          </Button>
+        )}
       </div>
 
-      <LoadingWrapper
-        isPending={isPending}
-        loadingFallback={<LoadingSpinner />}
-      >
+      <LoadingWrapper isPending={isPending}>
         <DataTable
           columns={columns}
           data={filteredLimits}
-          emptyMessage="No limits configured"
-          hasActiveFilters={hasActiveFilters}
-          filteredEmptyMessage="No limits match your filters. Try adjusting your search."
-          onClearFilters={() => {
-            updateQueryParams({ status: null, appliedTo: null, model: null });
-          }}
+          noResultsMessage="No limits found"
+          data-testid="limits-table"
         />
       </LoadingWrapper>
 
@@ -745,263 +879,193 @@ export default function LimitsPage() {
         open={isDialogOpen}
         onOpenChange={setIsDialogOpen}
         title={editingLimit ? "Edit limit" : "Create limit"}
-        description="Configure scoped LLM token-cost limits."
-        size="medium"
       >
-        <DialogForm
-          className="flex min-h-0 flex-1 flex-col"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void handleSubmit();
-          }}
-        >
-          <DialogBody className="space-y-4">
-            <Alert variant="info">
-              <Info className="h-4 w-4" />
-              <AlertDescription className="block">
-                A limit caps token-cost spend for the selected scope over a
-                recurring window. Limits stack: when more than one applies to a
-                request, every matching limit is checked and the request is
-                blocked if any is exceeded.
-                {limitsDocsUrl && (
-                  <>
-                    {" "}
-                    <ExternalDocsLink
-                      href={limitsDocsUrl}
-                      className="text-inherit underline underline-offset-4"
-                      showIcon={false}
+        <DialogForm onSubmit={handleSubmit}>
+          <DialogBody>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Scope</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {ENTITY_TYPE_ITEMS.map((item) => (
+                    <Button
+                      key={item.value}
+                      variant={
+                        formState.entityType === item.value
+                          ? "default"
+                          : "outline"
+                      }
+                      className="h-auto justify-start gap-2 p-3"
+                      onClick={() =>
+                        setFormState((prev) => ({
+                          ...prev,
+                          entityType: item.value,
+                          entityId: "",
+                        }))
+                      }
+                      type="button"
                     >
-                      Learn how limits are evaluated
-                    </ExternalDocsLink>
-                    .
-                  </>
+                      {item.icon}
+                      <div className="text-left">
+                        <div className="font-medium">{item.label}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {item.description}
+                        </div>
+                      </div>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {formState.entityType !== "organization" && (
+                <div className="space-y-2">
+                  <Label>
+                    {formState.entityType === "team"
+                      ? "Team"
+                      : formState.entityType === "user"
+                        ? "User"
+                        : formState.entityType === "virtual_key"
+                          ? "Virtual Key"
+                          : formState.entityType === "environment"
+                            ? "Environment"
+                            : formState.entityType === "llm_proxy"
+                              ? "LLM Proxy"
+                              : "Agent"}
+                  </Label>
+                  {formState.entityType === "team" ? (
+                    <SearchableSelect
+                      options={teams.map((team) => ({
+                        value: team.id,
+                        label: team.name,
+                      }))}
+                      value={formState.entityId}
+                      onValueChange={(value) =>
+                        setFormState((prev) => ({ ...prev, entityId: value }))
+                      }
+                      placeholder="Select team"
+                    />
+                  ) : formState.entityType === "user" ? (
+                    <UserSearchableSelect
+                      value={formState.entityId}
+                      onValueChange={(value) =>
+                        setFormState((prev) => ({ ...prev, entityId: value }))
+                      }
+                      placeholder="Select user"
+                    />
+                  ) : formState.entityType === "virtual_key" ? (
+                    <VirtualKeySearchableSelect
+                      value={formState.entityId}
+                      onValueChange={(value) =>
+                        setFormState((prev) => ({ ...prev, entityId: value }))
+                      }
+                      placeholder="Select virtual key"
+                    />
+                  ) : formState.entityType === "environment" ? (
+                    <SearchableSelect
+                      options={environments.map((env) => ({
+                        value: env.id,
+                        label: env.name,
+                      }))}
+                      value={formState.entityId}
+                      onValueChange={(value) =>
+                        setFormState((prev) => ({ ...prev, entityId: value }))
+                      }
+                      placeholder="Select environment"
+                    />
+                  ) : formState.entityType === "llm_proxy" ? (
+                    <SearchableSelect
+                      options={llmProxies.map((proxy) => ({
+                        value: proxy.id,
+                        label: proxy.name ?? "Unknown LLM proxy",
+                      }))}
+                      value={formState.entityId}
+                      onValueChange={(value) =>
+                        setFormState((prev) => ({ ...prev, entityId: value }))
+                      }
+                      placeholder="Select LLM proxy"
+                    />
+                  ) : (
+                    <SearchableSelect
+                      options={agents.map((agent) => ({
+                        value: agent.id,
+                        label: agent.name ?? "Unknown agent",
+                      }))}
+                      value={formState.entityId}
+                      onValueChange={(value) =>
+                        setFormState((prev) => ({ ...prev, entityId: value }))
+                      }
+                      placeholder="Select agent"
+                    />
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                <Label>Limit value (USD)</Label>
+                <Input
+                  type="text"
+                  value={formatNumericInput(formState.limitValue)}
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/[^0-9.]/g, "");
+                    setFormState((prev) => ({ ...prev, limitValue: value }));
+                  }}
+                  placeholder="Enter limit amount"
+                />
+                {shouldShowDefaultUserLimitNotice && (
+                  <p className="text-sm text-muted-foreground">
+                    This will override the default user limit of{" "}
+                    {formatCurrencyWhole(defaultUserLimits[0].limitValue)}
+                  </p>
                 )}
-              </AlertDescription>
-            </Alert>
+              </div>
 
-            {shouldShowDefaultUserLimitNotice && (
-              <Alert variant="info">
-                <AlertDescription>
-                  This custom user limit will override the default user limit
-                  for the selected user.
-                </AlertDescription>
-              </Alert>
-            )}
-
-            <div className="space-y-2">
-              <Label>Apply to</Label>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <SearchableSelect
-                  value={formState.entityType}
+              <div className="space-y-2">
+                <Label>Cleanup interval</Label>
+                <LimitCleanupIntervalSelect
+                  value={formState.cleanupInterval}
                   onValueChange={(value) =>
-                    setFormState((current) => ({
-                      ...current,
-                      entityType: value as LimitFormEntityType,
-                      entityId: "",
+                    setFormState((prev) => ({
+                      ...prev,
+                      cleanupInterval: value,
                     }))
                   }
-                  placeholder="Select scope"
-                  items={ENTITY_TYPE_ITEMS.map((item) => ({
-                    value: item.value,
-                    label: item.label,
-                    searchText: `${item.label} ${item.description}`,
-                    content: (
-                      <span className="flex flex-col gap-0.5">
-                        <span className="flex items-center gap-2">
-                          {item.icon}
-                          {item.label}
-                        </span>
-                        <span className="pl-6 text-xs text-muted-foreground">
-                          {item.description}
-                        </span>
-                      </span>
-                    ),
-                    selectedContent: (
-                      <span className="flex items-center gap-2">
-                        {item.icon}
-                        {item.label}
-                      </span>
-                    ),
-                  }))}
-                  className="w-full sm:flex-1"
-                  showSearchIcon={false}
                 />
+                <p className="text-sm text-muted-foreground">
+                  Usage resets at this interval
+                </p>
+              </div>
 
-                {formState.entityType === "team" && (
-                  <SearchableSelect
-                    value={formState.entityId}
-                    onValueChange={(value) =>
-                      setFormState((current) => ({
-                        ...current,
-                        entityId: value,
+              <div className="space-y-2">
+                <Label>Models</Label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="all-models"
+                    checked={formState.isAllModels}
+                    onChange={(e) =>
+                      setFormState((prev) => ({
+                        ...prev,
+                        isAllModels: e.target.checked,
+                        models: e.target.checked ? [] : prev.models,
                       }))
                     }
-                    placeholder="Select team"
-                    items={teams.map((team) => ({
-                      value: team.id,
-                      label: team.name,
-                      description: team.description ?? undefined,
-                    }))}
-                    className="w-full sm:flex-1"
                   />
-                )}
-
-                {formState.entityType === "user" && (
-                  <UserSearchableSelect
-                    value={formState.entityId}
-                    onValueChange={(value) =>
-                      setFormState((current) => ({
-                        ...current,
-                        entityId: value,
-                      }))
+                  <Label htmlFor="all-models" className="font-normal">
+                    Apply to all models
+                  </Label>
+                </div>
+                {!formState.isAllModels && (
+                  <LlmModelPicker
+                    models={modelOptions}
+                    selectedModels={formState.models}
+                    onSelectionChange={(models) =>
+                      setFormState((prev) => ({ ...prev, models }))
                     }
-                    users={members.map((member) => ({
-                      userId: member.id,
-                      name: member.name,
-                      email: member.email,
-                    }))}
-                    placeholder="Select user"
-                    className="w-full sm:flex-1"
-                  />
-                )}
-
-                {formState.entityType === "virtual_key" && (
-                  <VirtualKeySearchableSelect
-                    value={formState.entityId}
-                    onValueChange={(value) =>
-                      setFormState((current) => ({
-                        ...current,
-                        entityId: value,
-                      }))
-                    }
-                    virtualKeys={virtualKeys}
-                    placeholder="Select virtual key"
-                    className="w-full sm:flex-1"
-                  />
-                )}
-
-                {formState.entityType === "agent" && (
-                  <SearchableSelect
-                    value={formState.entityId}
-                    onValueChange={(value) =>
-                      setFormState((current) => ({
-                        ...current,
-                        entityId: value,
-                      }))
-                    }
-                    placeholder="Select agent"
-                    items={agents.map((agent) => ({
-                      value: agent.id,
-                      label: agent.name,
-                      description: agent.description ?? undefined,
-                    }))}
-                    className="w-full sm:flex-1"
-                  />
-                )}
-
-                {formState.entityType === "llm_proxy" && (
-                  <SearchableSelect
-                    value={formState.entityId}
-                    onValueChange={(value) =>
-                      setFormState((current) => ({
-                        ...current,
-                        entityId: value,
-                      }))
-                    }
-                    placeholder="Select LLM proxy"
-                    items={llmProxies.map((proxy) => ({
-                      value: proxy.id,
-                      label: proxy.name,
-                      description: proxy.description ?? undefined,
-                    }))}
-                    className="w-full sm:flex-1"
-                  />
-                )}
-
-                {formState.entityType === "environment" && (
-                  <EnvironmentScopeSelect
-                    value={formState.entityId}
-                    onValueChange={(value) =>
-                      setFormState((current) => ({
-                        ...current,
-                        entityId: value,
-                      }))
-                    }
-                    environments={environments}
-                    className="w-full sm:flex-1"
                   />
                 )}
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Select models</Label>
-              <LlmModelPicker
-                multiple
-                sortDirection="desc"
-                value={formState.isAllModels ? ["all"] : formState.models}
-                onValueChange={(values) => {
-                  const isAllModels = values.includes("all");
-                  setFormState((current) => ({
-                    ...current,
-                    models: isAllModels ? [] : values,
-                    isAllModels,
-                  }));
-                }}
-                models={modelOptions}
-                editable
-                includeAllOption
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Limit value ($)</Label>
-              <Input
-                value={formatNumericInput(formState.limitValue)}
-                onChange={(event) =>
-                  setFormState((current) => ({
-                    ...current,
-                    limitValue: event.target.value.replace(/[^0-9]/g, ""),
-                  }))
-                }
-                placeholder="1,000"
-                inputMode="numeric"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center gap-1.5">
-                <Label>Cleanup interval</Label>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="h-5 w-5 text-muted-foreground hover:text-foreground"
-                      aria-label="Cleanup interval help"
-                    >
-                      <Info className="h-3.5 w-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" align="start" className="max-w-72">
-                    Rolling resets after elapsed time. Calendar resets at the
-                    next day, week, or month boundary.
-                  </TooltipContent>
-                </Tooltip>
-              </div>
-              <LimitCleanupIntervalSelect
-                value={formState.cleanupInterval}
-                onValueChange={(value) =>
-                  setFormState((current) => ({
-                    ...current,
-                    cleanupInterval: value,
-                  }))
-                }
-              />
             </div>
           </DialogBody>
-          <DialogStickyFooter className="mt-0">
+          <DialogStickyFooter>
             <Button
               type="button"
               variant="outline"
@@ -1009,14 +1073,17 @@ export default function LimitsPage() {
             >
               Cancel
             </Button>
-            <Button
-              type="submit"
-              disabled={
-                !canSubmit || createLimit.isPending || updateLimit.isPending
+            <PermissionButton
+              permissions={
+                editingLimit
+                  ? { llmLimit: ["update"] }
+                  : { llmLimit: ["create"] }
               }
+              type="submit"
+              disabled={!canSubmit}
             >
-              {editingLimit ? "Save changes" : "Create limit"}
-            </Button>
+              {editingLimit ? "Update" : "Create"}
+            </PermissionButton>
           </DialogStickyFooter>
         </DialogForm>
       </FormDialog>
@@ -1024,21 +1091,14 @@ export default function LimitsPage() {
       <DeleteConfirmDialog
         open={!!limitToDelete}
         onOpenChange={(open) => !open && setLimitToDelete(null)}
-        title="Delete limit"
-        description="This action cannot be undone."
-        isPending={deleteLimit.isPending}
         onConfirm={handleDelete}
-        confirmLabel="Delete"
-        pendingLabel="Deleting..."
+        title="Delete limit"
+        description={`Are you sure you want to delete this limit? This action cannot be undone.`}
       />
+
+      <ExternalDocsLink url={limitsDocsUrl} />
     </div>
   );
-}
-
-export function getLimitModels(limit: LimitData): string[] {
-  return Array.isArray(limit.model)
-    ? limit.model.filter((model): model is string => typeof model === "string")
-    : [];
 }
 
 function formatNextLimitReset(
@@ -1072,76 +1132,12 @@ function formatResetDate(date: Date): string {
   })}`;
 }
 
-function addCleanupInterval(
-  date: Date,
-  cleanupInterval: LimitCleanupInterval,
-): Date {
-  const next = new Date(date);
-  switch (cleanupInterval) {
-    case "1h":
-      next.setHours(next.getHours() + 1);
-      return next;
-    case "12h":
-      next.setHours(next.getHours() + 12);
-      return next;
-    case "24h":
-      next.setDate(next.getDate() + 1);
-      return next;
-    case "1w":
-      next.setDate(next.getDate() + 7);
-      return next;
-    case "1m":
-      next.setMonth(next.getMonth() + 1);
-      return next;
-    case "calendar_day":
-    case "calendar_week_sunday":
-    case "calendar_week_monday":
-    case "calendar_month":
-      return getNextCalendarResetDate(next, cleanupInterval);
+function getLimitModels(limit: LimitData): string[] {
+  if (Array.isArray(limit.model)) {
+    return limit.model;
   }
-}
-
-function isCalendarCleanupInterval(
-  cleanupInterval: LimitCleanupInterval,
-): cleanupInterval is Extract<
-  LimitCleanupInterval,
-  | "calendar_day"
-  | "calendar_week_sunday"
-  | "calendar_week_monday"
-  | "calendar_month"
-> {
-  return cleanupInterval.startsWith("calendar_");
-}
-
-function getNextCalendarResetDate(
-  date: Date,
-  cleanupInterval: Extract<
-    LimitCleanupInterval,
-    | "calendar_day"
-    | "calendar_week_sunday"
-    | "calendar_week_monday"
-    | "calendar_month"
-  >,
-): Date {
-  const next = new Date(date);
-  next.setHours(0, 0, 0, 0);
-
-  switch (cleanupInterval) {
-    case "calendar_day":
-      next.setDate(next.getDate() + 1);
-      return next;
-    case "calendar_week_sunday": {
-      const daysUntilSunday = (7 - next.getDay()) % 7 || 7;
-      next.setDate(next.getDate() + daysUntilSunday);
-      return next;
-    }
-    case "calendar_week_monday": {
-      const daysUntilMonday = (8 - next.getDay()) % 7 || 7;
-      next.setDate(next.getDate() + daysUntilMonday);
-      return next;
-    }
-    case "calendar_month":
-      next.setMonth(next.getMonth() + 1, 1);
-      return next;
+  if (typeof limit.model === "string" && limit.model) {
+    return [limit.model];
   }
+  return [];
 }
